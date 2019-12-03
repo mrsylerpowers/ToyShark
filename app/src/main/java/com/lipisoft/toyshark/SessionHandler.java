@@ -16,37 +16,45 @@
 
 package com.lipisoft.toyshark;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
 
 import com.lipisoft.toyshark.network.ip.IPPacketFactory;
 import com.lipisoft.toyshark.network.ip.IPv4Header;
 import com.lipisoft.toyshark.socket.SocketData;
+import com.lipisoft.toyshark.transport.ITransportHeader;
 import com.lipisoft.toyshark.transport.tcp.PacketHeaderException;
 import com.lipisoft.toyshark.transport.tcp.TCPHeader;
 import com.lipisoft.toyshark.transport.tcp.TCPPacketFactory;
-import com.lipisoft.toyshark.transport.ITransportHeader;
 import com.lipisoft.toyshark.transport.udp.UDPHeader;
 import com.lipisoft.toyshark.transport.udp.UDPPacketFactory;
 import com.lipisoft.toyshark.util.PacketUtil;
 
-import androidx.annotation.NonNull;
-import android.util.Log;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.LinkedList;
+import java.util.Queue;
 
 /**
  * handle VPN client request and response. it create a new session for each VPN client.
  * @author Borey Sao
  * Date: May 22, 2014
  */
-class SessionHandler {
+public class SessionHandler {
 	private static final String TAG = "SessionHandler";
 
 	private static final SessionHandler handler = new SessionHandler();
+	private Queue<Session> writableSessionsQueue = new LinkedList<>();
 	private IClientPacketWriter writer;
 	private SocketData packetData;
 
 	public static SessionHandler getInstance(){
 		return handler;
+	}
+
+	public synchronized Queue<Session> getWritableSessionsQueue() {
+		return writableSessionsQueue;
 	}
 
 	private SessionHandler(){
@@ -74,6 +82,9 @@ class SessionHandler {
 		session.setLastUdpHeader(udpheader);
 		int len = SessionManager.INSTANCE.addClientData(clientPacketData, session);
 		session.setDataForSendingReady(true);
+		// Put this on the queue and nudge the socket NIO thread to write it
+		this.writableSessionsQueue.add(session);
+		session.getSelectionKey().selector().wakeup();
 		Log.d(TAG,"added UDP data for bg worker to send: "+len);
 		SessionManager.INSTANCE.keepSessionAlive(session);
 	}
@@ -91,7 +102,7 @@ class SessionHandler {
 			//set windows size and scale, set reply time in options
 			replySynAck(ipHeader,tcpheader);
 		} else if(tcpheader.isACK()) {
-			String key = SessionManager.INSTANCE.createKey(destinationIP, destinationPort, sourceIP, sourcePort);
+			String key = Session.getSessionKey(destinationIP, destinationPort, sourceIP, sourcePort);
 			Session session = SessionManager.INSTANCE.getSessionByKey(key);
 
 			if(session == null) {
@@ -234,7 +245,7 @@ class SessionHandler {
 			writer.write(data);
 			packetData.addData(data);
 			if(session != null){
-				session.getSelectionKey().cancel();
+				session.cancelKey();
 				SessionManager.INSTANCE.closeSession(session);
 				Log.d(TAG,"ACK to client's FIN and close session => "+PacketUtil.intToIPAddress(ip.getDestinationIP())+":"+tcp.getDestinationPort()
 						+"-"+PacketUtil.intToIPAddress(ip.getSourceIP())+":"+tcp.getSourcePort());
@@ -285,7 +296,9 @@ class SessionHandler {
 		session.setDataForSendingReady(true);
 		session.setTimestampReplyto(tcp.getTimeStampSender());
 		session.setTimestampSender((int)System.currentTimeMillis());
-
+		// Put this on the queue and nudge the socket NIO thread to write it
+		this.writableSessionsQueue.add(session);
+		session.getSelectionKey().selector().wakeup();
 		Log.d(TAG,"set data ready for sending to dest, bg will do it. data size: "
                 + session.getSendingDataSize());
 	}

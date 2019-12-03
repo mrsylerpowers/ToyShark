@@ -1,7 +1,8 @@
 package com.lipisoft.toyshark.socket;
 
-import androidx.annotation.NonNull;
 import android.util.Log;
+
+import androidx.annotation.NonNull;
 
 import com.lipisoft.toyshark.IClientPacketWriter;
 import com.lipisoft.toyshark.Session;
@@ -63,7 +64,7 @@ class SocketDataReaderWorker implements Runnable {
 
 		if(session.isAbortingConnection()) {
 			Log.d(TAG,"removing aborted connection -> "+ sessionKey);
-			session.getSelectionKey().cancel();
+			session.cancelKey();
 			if (channel instanceof SocketChannel){
 				try {
 					SocketChannel socketChannel = (SocketChannel) channel;
